@@ -23,6 +23,7 @@ import com.example.radiodbtool.database.RadioStationRepository;
 
 import java.io.IOException;
 import java.io.OutputStream;
+import java.util.Arrays;
 import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
@@ -30,8 +31,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_SAVE_FILE = 1;
 
     private EditText etServerUrl;
-    private Spinner spinnerCountry;
-    private Spinner spinnerLanguage;
+    private AutoCompleteTextView etCountry;
+    private AutoCompleteTextView etLanguage;
     private EditText etKeyword;
     private Spinner spinnerExportFormat;
     private Button btnSync;
@@ -47,8 +48,6 @@ public class MainActivity extends AppCompatActivity {
     private List<RadioStation> stationsToExport;
     private int exportFormat;
     private String exportCountry, exportLanguage, exportKeyword;
-    private ArrayAdapter<String> countryAdapter;
-    private ArrayAdapter<String> languageAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,9 +58,6 @@ public class MainActivity extends AppCompatActivity {
         syncViewModel = new ViewModelProvider(this).get(SyncViewModel.class);
 
         etServerUrl = findViewById(R.id.etServerUrl);
-        spinnerCountry = findViewById(R.id.spinnerCountry);
-        spinnerLanguage = findViewById(R.id.spinnerLanguage);
-        etKeyword = findViewById(R.id.etKeyword);
         spinnerExportFormat = findViewById(R.id.spinnerExportFormat);
         btnSync = findViewById(R.id.btnSync);
         btnResumeSync = findViewById(R.id.btnResumeSync);
@@ -71,7 +67,7 @@ public class MainActivity extends AppCompatActivity {
         progressBarExport = findViewById(R.id.progressBarExport);
         tvExportStatus = findViewById(R.id.tvExportStatus);
 
-        setupCountryAndLanguageSpinners();
+        setupCountryAndLanguageInputs();
         setupSpinner();
         setupSyncButton();
         setupResumeSyncButton();
@@ -80,40 +76,37 @@ public class MainActivity extends AppCompatActivity {
         loadServerUrl();
     }
 
-    private void setupCountryAndLanguageSpinners() {
-        countryAdapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item);
-        countryAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerCountry.setAdapter(countryAdapter);
-
-        languageAdapter = new ArrayAdapter<>(this,
-                android.R.layout.simple_spinner_item);
-        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        spinnerLanguage.setAdapter(languageAdapter);
-
-        loadCountryAndLanguageOptions();
+    private void setupCountryAndLanguageInputs() {
+        loadCountryAndLanguageSuggestions();
     }
 
-    private void loadCountryAndLanguageOptions() {
+    private void loadCountryAndLanguageSuggestions() {
         new Thread(() -> {
-            List<String> countries = repository.getAllCountries();
-            List<String> languages = repository.getAllLanguages();
+            try {
+                List<String> countries = repository.getAllCountries();
+                List<String> languages = repository.getAllLanguages();
 
-            runOnUiThread(() -> {
-                countryAdapter.clear();
-                countryAdapter.add(getString(R.string.hint_country));
-                if (countries != null) {
-                    countryAdapter.addAll(countries);
-                }
-                countryAdapter.notifyDataSetChanged();
+                runOnUiThread(() -> {
+                    String defaultCountry = "China";
+                    String defaultLanguage = "Chinese";
+                    
+                    ArrayAdapter<String> countryAdapter = new ArrayAdapter<>(this,
+                            android.R.layout.simple_dropdown_item_1line,
+                            countries != null && !countries.isEmpty() ? countries : Arrays.asList(defaultCountry, "United States", "United Kingdom", "Germany", "France", "Japan", "Korea", "Russia", "Brazil"));
+                    etCountry.setAdapter(countryAdapter);
+                    etCountry.setThreshold(1);
+                    etCountry.setText(defaultCountry);
 
-                languageAdapter.clear();
-                languageAdapter.add(getString(R.string.hint_language));
-                if (languages != null) {
-                    languageAdapter.addAll(languages);
-                }
-                languageAdapter.notifyDataSetChanged();
-            });
+                    ArrayAdapter<String> languageAdapter = new ArrayAdapter<>(this,
+                            android.R.layout.simple_dropdown_item_1line,
+                            languages != null && !languages.isEmpty() ? languages : Arrays.asList(defaultLanguage, "English", "German", "French", "Spanish", "Japanese", "Korean", "Russian", "Portuguese"));
+                    etLanguage.setAdapter(languageAdapter);
+                    etLanguage.setThreshold(1);
+                    etLanguage.setText(defaultLanguage);
+                });
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }).start();
     }
 
@@ -136,8 +129,8 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            String country = getSelectedCountry();
-            String language = getSelectedLanguage();
+            String country = etCountry.getText().toString().trim();
+            String language = etLanguage.getText().toString().trim();
             String keyword = etKeyword.getText().toString().trim();
 
             saveServerUrl(serverUrl);
@@ -204,8 +197,8 @@ public class MainActivity extends AppCompatActivity {
 
     private void setupExportButton() {
         btnExport.setOnClickListener(v -> {
-            String country = getSelectedCountry();
-            String language = getSelectedLanguage();
+            String country = etCountry.getText().toString().trim();
+            String language = etLanguage.getText().toString().trim();
             String keyword = etKeyword.getText().toString().trim();
 
             btnExport.setEnabled(false);
@@ -371,21 +364,5 @@ public class MainActivity extends AppCompatActivity {
         String savedUrl = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("server_url", "https://de1.api.radio-browser.info");
         etServerUrl.setText(savedUrl);
-    }
-
-    private String getSelectedCountry() {
-        int position = spinnerCountry.getSelectedItemPosition();
-        if (position > 0) {
-            return spinnerCountry.getItemAtPosition(position).toString();
-        }
-        return "";
-    }
-
-    private String getSelectedLanguage() {
-        int position = spinnerLanguage.getSelectedItemPosition();
-        if (position > 0) {
-            return spinnerLanguage.getItemAtPosition(position).toString();
-        }
-        return "";
     }
 }
