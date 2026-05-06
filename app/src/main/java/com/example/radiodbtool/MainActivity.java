@@ -2,6 +2,8 @@ package com.example.radiodbtool;
 
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.lifecycle.ViewModelProvider;
+import androidx.lifecycle.Observer;
 
 import android.content.Intent;
 import android.content.SharedPreferences;
@@ -28,22 +30,25 @@ public class MainActivity extends AppCompatActivity {
     private static final int REQUEST_SAVE_FILE = 1;
 
     private EditText etServerUrl;
-    private Button btnSync;
-    private ProgressBar progressBarSync;
-    private TextView tvSyncStatus;
-
-    private EditText etCountry;
-    private EditText etLanguage;
+    private Spinner spinnerCountry;
+    private Spinner spinnerLanguage;
     private EditText etKeyword;
     private Spinner spinnerExportFormat;
+    private Button btnSync;
+    private Button btnResumeSync;
+    private ProgressBar progressBarSync;
+    private TextView tvSyncStatus;
     private Button btnExport;
     private ProgressBar progressBarExport;
     private TextView tvExportStatus;
 
     private RadioStationRepository repository;
+    private SyncViewModel syncViewModel;
     private List<RadioStation> stationsToExport;
     private int exportFormat;
     private String exportCountry, exportLanguage, exportKeyword;
+    private ArrayAdapter<String> countryAdapter;
+    private ArrayAdapter<String> languageAdapter;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -51,24 +56,65 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
 
         repository = RadioStationRepository.getInstance(this);
+        syncViewModel = new ViewModelProvider(this).get(SyncViewModel.class);
 
         etServerUrl = findViewById(R.id.etServerUrl);
-        btnSync = findViewById(R.id.btnSync);
-        progressBarSync = findViewById(R.id.progressBarSync);
-        tvSyncStatus = findViewById(R.id.tvSyncStatus);
-
-        etCountry = findViewById(R.id.etCountry);
-        etLanguage = findViewById(R.id.etLanguage);
+        spinnerCountry = findViewById(R.id.spinnerCountry);
+        spinnerLanguage = findViewById(R.id.spinnerLanguage);
         etKeyword = findViewById(R.id.etKeyword);
         spinnerExportFormat = findViewById(R.id.spinnerExportFormat);
+        btnSync = findViewById(R.id.btnSync);
+        btnResumeSync = findViewById(R.id.btnResumeSync);
+        progressBarSync = findViewById(R.id.progressBarSync);
+        tvSyncStatus = findViewById(R.id.tvSyncStatus);
         btnExport = findViewById(R.id.btnExport);
         progressBarExport = findViewById(R.id.progressBarExport);
         tvExportStatus = findViewById(R.id.tvExportStatus);
 
+        setupCountryAndLanguageSpinners();
         setupSpinner();
         setupSyncButton();
+        setupResumeSyncButton();
         setupExportButton();
+        setupSyncObserver();
         loadServerUrl();
+    }
+
+    private void setupCountryAndLanguageSpinners() {
+        countryAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item);
+        countryAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerCountry.setAdapter(countryAdapter);
+
+        languageAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item);
+        languageAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerLanguage.setAdapter(languageAdapter);
+
+        loadCountryAndLanguageOptions();
+    }
+
+    private void loadCountryAndLanguageOptions() {
+        new Thread(() -> {
+            List<String> countries = repository.getAllCountries();
+            List<String> languages = repository.getAllLanguages();
+
+            runOnUiThread(() -> {
+                countryAdapter.clear();
+                countryAdapter.add(getString(R.string.hint_country));
+                if (countries != null) {
+                    countryAdapter.addAll(countries);
+                }
+                countryAdapter.notifyDataSetChanged();
+
+                languageAdapter.clear();
+                languageAdapter.add(getString(R.string.hint_language));
+                if (languages != null) {
+                    languageAdapter.addAll(languages);
+                }
+                languageAdapter.notifyDataSetChanged();
+            });
+        }).start();
     }
 
     private void setupSpinner() {
@@ -90,68 +136,76 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
-            String country = etCountry.getText().toString().trim();
-            String language = etLanguage.getText().toString().trim();
+            String country = getSelectedCountry();
+            String language = getSelectedLanguage();
             String keyword = etKeyword.getText().toString().trim();
 
             saveServerUrl(serverUrl);
 
-            btnSync.setEnabled(false);
-            progressBarSync.setVisibility(View.VISIBLE);
-            progressBarSync.setIndeterminate(true);
-            tvSyncStatus.setText("正在同步，请稍候...");
+            syncViewModel.startSync(serverUrl, country, language, keyword);
+        });
+    }
 
-            boolean hasFilter = !country.isEmpty() || !language.isEmpty() || !keyword.isEmpty();
+    private void setupResumeSyncButton() {
+        btnResumeSync.setOnClickListener(v -> {
+            syncViewModel.resumeSync();
+        });
+    }
 
-            new Thread(() -> {
-                RadioStationRepository.ProgressListener listener = new RadioStationRepository.ProgressListener() {
-                    @Override
-                    public void onProgress(String message, int current, int total) {
-                        runOnUiThread(() -> {
-                            if (total > 0) {
-                                progressBarSync.setIndeterminate(false);
-                                progressBarSync.setMax(total);
-                                progressBarSync.setProgress(current);
-                                tvSyncStatus.setText(message + " " + current + "/" + total);
-                            } else {
-                                progressBarSync.setIndeterminate(true);
-                                tvSyncStatus.setText(message + " " + current + " 条");
-                            }
-                        });
-                    }
+    private void setupSyncObserver() {
+        syncViewModel.isSyncing().observe(this, isSyncing -> {
+            btnSync.setEnabled(!isSyncing);
+            btnResumeSync.setEnabled(!isSyncing && syncViewModel.hasPendingSync().getValue());
+            progressBarSync.setVisibility(isSyncing ? View.VISIBLE : View.GONE);
 
-                    @Override
-                    public void onSuccess(String message) {
-                        runOnUiThread(() -> {
-                            tvSyncStatus.setText(message);
-                            btnSync.setEnabled(true);
-                            Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
-                        });
-                    }
+            if (isSyncing) {
+                progressBarSync.setIndeterminate(syncViewModel.getProgressTotal().getValue() == 0);
+            }
+        });
 
-                    @Override
-                    public void onError(String error) {
-                        runOnUiThread(() -> {
-                            tvSyncStatus.setText("同步失败：" + error);
-                            btnSync.setEnabled(true);
-                            Toast.makeText(MainActivity.this, "同步失败：" + error, Toast.LENGTH_LONG).show();
-                        });
-                    }
-                };
+        syncViewModel.getProgressCurrent().observe(this, current -> {
+            Integer total = syncViewModel.getProgressTotal().getValue();
+            if (total != null && total > 0) {
+                progressBarSync.setIndeterminate(false);
+                progressBarSync.setMax(total);
+                progressBarSync.setProgress(current);
+            }
+        });
 
-                if (hasFilter) {
-                    repository.syncStationsByFilter(MainActivity.this, serverUrl, country, language, keyword, listener);
-                } else {
-                    repository.syncAllStations(MainActivity.this, serverUrl, listener);
+        syncViewModel.getSyncStatus().observe(this, status -> {
+            tvSyncStatus.setText(status);
+            if (status.contains("同步完成") || status.contains("数据已是最新")) {
+                loadCountryAndLanguageOptions();
+                Toast.makeText(MainActivity.this, status, Toast.LENGTH_LONG).show();
+            }
+        });
+
+        syncViewModel.getSyncError().observe(this, error -> {
+            if (error != null && !error.isEmpty()) {
+                Toast.makeText(MainActivity.this, "同步失败: " + error, Toast.LENGTH_LONG).show();
+            }
+        });
+
+        syncViewModel.hasPendingSync().observe(this, hasPending -> {
+            btnResumeSync.setEnabled(hasPending && !syncViewModel.isSyncing().getValue());
+        });
+
+        syncViewModel.getProgressTotal().observe(this, total -> {
+            Integer current = syncViewModel.getProgressCurrent().getValue();
+            if (total != null && total > 0) {
+                progressBarSync.setIndeterminate(false);
+                progressBarSync.setMax(total);
+                if (current != null) {
+                    progressBarSync.setProgress(current);
                 }
-            }).start();
+            }
         });
     }
 
     private void setupExportButton() {
         btnExport.setOnClickListener(v -> {
-            String country = etCountry.getText().toString().trim();
-            String language = etLanguage.getText().toString().trim();
+            String country = getSelectedCountry();
+            String language = getSelectedLanguage();
             String keyword = etKeyword.getText().toString().trim();
 
             btnExport.setEnabled(false);
@@ -317,5 +371,21 @@ public class MainActivity extends AppCompatActivity {
         String savedUrl = getSharedPreferences("settings", MODE_PRIVATE)
                 .getString("server_url", "https://de1.api.radio-browser.info");
         etServerUrl.setText(savedUrl);
+    }
+
+    private String getSelectedCountry() {
+        int position = spinnerCountry.getSelectedItemPosition();
+        if (position > 0) {
+            return spinnerCountry.getItemAtPosition(position).toString();
+        }
+        return "";
+    }
+
+    private String getSelectedLanguage() {
+        int position = spinnerLanguage.getSelectedItemPosition();
+        if (position > 0) {
+            return spinnerLanguage.getItemAtPosition(position).toString();
+        }
+        return "";
     }
 }

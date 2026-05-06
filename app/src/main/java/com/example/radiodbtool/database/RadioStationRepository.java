@@ -8,9 +8,11 @@ import android.util.Log;
 import androidx.room.Room;
 
 import com.example.radiodbtool.HttpClient;
+import com.example.radiodbtool.SyncProgressManager;
 import com.example.radiodbtool.Utils;
 import com.example.radiodbtool.station.DataRadioStation;
 
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executor;
@@ -28,6 +30,7 @@ public class RadioStationRepository {
     
     private static final Object sSyncLock = new Object();
     private static volatile RadioStationRepository INSTANCE;
+    private SyncProgressManager progressManager;
     
     public static RadioStationRepository getInstance(Context context) {
         if (INSTANCE == null) {
@@ -49,6 +52,7 @@ public class RadioStationRepository {
                 .build();
         this.tempRadioStationDao = tempDatabase.radioStationDao();
         this.context = context;
+        this.progressManager = new SyncProgressManager(context);
     }
     
     public interface ProgressListener {
@@ -58,35 +62,39 @@ public class RadioStationRepository {
     }
     
     public void syncAllStations(Context context, String serverUrl, ProgressListener listener) {
-        executor.execute(() -> syncAllStationsInternal(context, serverUrl, listener));
+        executor.execute(() -> syncAllStationsInternal(context, serverUrl, listener, false));
     }
-    
-    private void syncAllStationsInternal(Context context, String serverUrl, ProgressListener listener) {
+
+    public void resumeSyncAllStations(Context context, String serverUrl, ProgressListener listener) {
+        executor.execute(() -> syncAllStationsInternal(context, serverUrl, listener, true));
+    }
+
+    private void syncAllStationsInternal(Context context, String serverUrl, ProgressListener listener, boolean resume) {
         synchronized (sSyncLock) {
             try {
                 listener.onProgress("正在检查网络...", 0, 100);
-                
+
                 if (!Utils.hasAnyConnection(context)) {
                     listener.onError("网络连接不可用");
                     return;
                 }
-                
+
                 OkHttpClient httpClient = HttpClient.getInstance();
                 boolean useHttps = serverUrl.startsWith("https://");
                 String server = serverUrl.replace("http://", "").replace("https://", "");
-                
+
                 if (server.contains("/")) {
                     server = server.substring(0, server.indexOf("/"));
                 }
-                
+
                 listener.onProgress("正在获取电台数量...", 0, 100);
-                
+
                 String statsResult = Utils.downloadFeedFromServer(httpClient, context, server, "json/stats", useHttps);
                 if (statsResult == null) {
                     listener.onError("获取服务器统计信息失败");
                     return;
                 }
-                
+
                 int totalStations;
                 try {
                     org.json.JSONObject stats = new org.json.JSONObject(statsResult);
@@ -96,34 +104,50 @@ public class RadioStationRepository {
                     listener.onError("解析统计信息失败: " + e.getMessage());
                     return;
                 }
-                
+
                 listener.onProgress("发现 " + totalStations + " 个电台", 0, totalStations);
-                
+
+                String filterKey = "full";
+                int startOffset = 0;
+
+                if (resume) {
+                    startOffset = progressManager.getLastOffset();
+                    if (startOffset > 0 && progressManager.hasProgress()) {
+                        listener.onProgress("从断点恢复，已下载 " + startOffset + " 个电台", startOffset, totalStations);
+                        Log.d(TAG, "断点续传: 从 offset=" + startOffset + " 继续");
+                    }
+                }
+
+                if (startOffset >= totalStations) {
+                    listener.onSuccess("数据已是最新");
+                    return;
+                }
+
                 tempRadioStationDao.deleteAll();
-                
+
                 final int pageSize = 100;
-                int totalPages = (int) Math.ceil((double) totalStations / pageSize);
-                int totalDownloaded = 0;
-                
-                for (int page = 0; page < totalPages; page++) {
+                int totalDownloaded = startOffset;
+
+                for (int page = startOffset / pageSize; page < totalPages; page++) {
                     int skip = page * pageSize;
                     String path = "json/stations?limit=" + pageSize + "&offset=" + skip;
-                    
+
                     String resultString = Utils.downloadFeedFromServer(httpClient, context, server, path, useHttps);
-                    
+
                     if (resultString != null) {
                         List<DataRadioStation> dataStations = DataRadioStation.DecodeJson(resultString);
-                        
+
                         if (dataStations != null && !dataStations.isEmpty()) {
                             List<RadioStation> radioStations = new ArrayList<>();
                             for (DataRadioStation dataStation : dataStations) {
                                 RadioStation radioStation = RadioStation.fromDataRadioStation(dataStation);
                                 radioStations.add(radioStation);
                             }
-                            
+
                             tempRadioStationDao.insertAll(radioStations);
                             totalDownloaded += radioStations.size();
-                            
+
+                            progressManager.saveSyncProgress(totalDownloaded, totalStations, serverUrl, "", "", "");
                             listener.onProgress("正在下载电台数据...", totalDownloaded, totalStations);
                         }
                     }
@@ -149,6 +173,7 @@ public class RadioStationRepository {
                     
                     tempRadioStationDao.deleteAll();
                     listener.onSuccess("同步完成，共 " + totalDownloaded + " 个电台");
+                    progressManager.clearProgress();
                 } else {
                     listener.onError("没有获取到任何电台数据");
                 }
@@ -183,62 +208,86 @@ public class RadioStationRepository {
         executor.execute(() -> syncStationsByFilterInternal(context, serverUrl, country, language, keyword, listener));
     }
     
+    private String buildFilterKey(String country, String language, String keyword) {
+        try {
+            String input = country + "|" + language + "|" + keyword;
+            MessageDigest md = MessageDigest.getInstance("MD5");
+            byte[] digest = md.digest(input.getBytes());
+            StringBuilder sb = new StringBuilder();
+            for (byte b : digest) {
+                sb.append(String.format("%02x", b));
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            return "filter_" + country.hashCode() + "_" + language.hashCode() + "_" + keyword.hashCode();
+        }
+    }
+
     private void syncStationsByFilterInternal(Context context, String serverUrl, String country, String language, String keyword, ProgressListener listener) {
         synchronized (sSyncLock) {
             try {
                 listener.onProgress("正在检查网络...", 0, 100);
-                
+
                 if (!Utils.hasAnyConnection(context)) {
                     listener.onError("网络连接不可用");
                     return;
                 }
-                
+
                 OkHttpClient httpClient = HttpClient.getInstance();
                 boolean useHttps = serverUrl.startsWith("https://");
                 String server = serverUrl.replace("http://", "").replace("https://", "");
-                
+
                 if (server.contains("/")) {
                     server = server.substring(0, server.indexOf("/"));
                 }
-                
+
                 listener.onProgress("正在下载符合条件的电台...", 0, 0);
-                
+
+                String filterKey = buildFilterKey(country, language, keyword);
+                int startOffset = progressManager.getLastOffset();
+
+                if (startOffset > 0) {
+                    listener.onProgress("从断点恢复，已下载 " + startOffset + " 个电台", startOffset, 0);
+                    Log.d(TAG, "断点续传: filter=" + filterKey + ", offset=" + startOffset);
+                }
+
                 tempRadioStationDao.deleteAll();
-                
+
                 final int limit = 500;
-                int offset = 0;
-                int totalDownloaded = 0;
-                
+                int offset = startOffset;
+                int totalDownloaded = startOffset;
+
                 while (true) {
                     String url = buildFilterUrl(server, useHttps, country, language, keyword, limit, offset);
                     String path = url.replace(useHttps ? "https://" : "http://", "").replace(server + "/", "");
-                    
+
                     String resultString = Utils.downloadFeedFromServer(httpClient, context, server, path, useHttps);
-                    
+
                     if (resultString == null) {
                         listener.onError("获取电台数据失败");
                         return;
                     }
-                    
+
                     List<DataRadioStation> dataStations = DataRadioStation.DecodeJson(resultString);
-                    
+
                     if (dataStations == null || dataStations.isEmpty()) {
                         break;
                     }
-                    
+
                     List<RadioStation> radioStations = new ArrayList<>();
                     for (DataRadioStation ds : dataStations) {
                         radioStations.add(RadioStation.fromDataRadioStation(ds));
                     }
-                    
+
                     tempRadioStationDao.insertAll(radioStations);
                     totalDownloaded += dataStations.size();
-                    
+
+                    progressManager.saveSyncProgress(totalDownloaded, 0, serverUrl, country, language, keyword);
                     listener.onProgress("正在下载电台数据...", totalDownloaded, 0);
-                    
+
                     offset += limit;
                     if (dataStations.size() < limit) break;
-                    
+
                     Thread.sleep(100);
                 }
                 
@@ -262,6 +311,7 @@ public class RadioStationRepository {
                     
                     tempRadioStationDao.deleteAll();
                     listener.onSuccess("同步完成，共 " + totalDownloaded + " 个电台");
+                    progressManager.clearProgress();
                 } else {
                     listener.onError("没有找到符合条件的电台");
                 }

@@ -35,44 +35,38 @@
             android:textStyle="bold"
             android:layout_marginTop="16dp"/>
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/label_sync_filter_hint"
-            android:textSize="14sp"
-            android:textColor="@android:color/darker_gray"
-            android:layout_marginTop="4dp"/>
-
-        <EditText
-            android:id="@+id/etCountry"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_country"
-            android:inputType="textCapWords"
-            android:layout_marginTop="8dp"/>
-
-        <EditText
-            android:id="@+id/etLanguage"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_language"
-            android:inputType="textCapWords"
-            android:layout_marginTop="8dp"/>
-
         <EditText
             android:id="@+id/etKeyword"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="@string/hint_keyword"
+            android:inputType="text"
             android:layout_marginTop="8dp"/>
 
-        <Button
-            android:id="@+id/btnSync"
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/btn_sync"
-            android:backgroundTint="@color/colorPrimary"
-            android:layout_marginTop="16dp"/>
+            android:orientation="horizontal"
+            android:layout_marginTop="16dp">
+
+            <Button
+                android:id="@+id/btnSync"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/btn_sync"
+                android:backgroundTint="@color/colorPrimary"/>
+
+            <Button
+                android:id="@+id/btnResumeSync"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="恢复同步"
+                android:backgroundTint="@color/colorAccent"
+                android:layout_marginStart="8dp"
+                android:enabled="false"/>
+        </LinearLayout>
 
         <TextView
             android:layout_width="wrap_content"
