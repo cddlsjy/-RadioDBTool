@@ -57,6 +57,12 @@ public interface RadioStationDao {
            "ORDER BY clickcount DESC")
     List<RadioStation> getFilteredStations(String country, String language, String keyword);
 
+    @Query("SELECT * FROM radio_stations WHERE (:country = '' OR country = :country) " +
+           "AND (:language = '' OR language = :language) " +
+           "AND (:keyword = '' OR name LIKE '%' || :keyword || '%' OR tags LIKE '%' || :keyword || '%') " +
+           "ORDER BY clickcount DESC")
+    List<RadioStation> getFilteredStationsSync(String country, String language, String keyword);
+
     @Query("SELECT station_uuid FROM radio_stations")
     List<String> getAllStationIds();
 

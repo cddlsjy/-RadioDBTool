@@ -30,6 +30,7 @@
     <string name="export_format_m3u">M3U</string>
     <string name="export_format_csv">CSV</string>
     <string name="export_format_json">JSON</string>
+    <string name="export_format_db">数据库 (.db)</string>
     
     <string name="error_empty_server">请输入服务器地址</string>
     <string name="error_no_stations">未找到符合条件的电台</string>

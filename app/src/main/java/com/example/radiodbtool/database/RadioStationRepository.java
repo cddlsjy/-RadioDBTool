@@ -163,6 +163,10 @@ public class RadioStationRepository {
         return radioStationDao.getFilteredStations(country, language, keyword);
     }
     
+    public List<RadioStation> getFilteredStationsSync(String country, String language, String keyword) {
+        return radioStationDao.getFilteredStationsSync(country, language, keyword);
+    }
+    
     public int getStationCount() {
         return radioStationDao.getCount();
     }

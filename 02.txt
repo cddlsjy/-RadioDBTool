@@ -1,0 +1,275 @@
+# Android 版 RadioDroid 增加数据库导出功能（支持筛选条件）
+
+以下是为 RadioDroid 增加“将本地数据库（可按国家/语言/关键词筛选）导出为 .db 文件”功能的完整修改指南。
+
+## 1. 新增导出辅助类
+
+创建新文件 `DatabaseExportHelper.java`，封装导出逻辑。
+
+```java
+// net/programmierecke/radiodroid2/utils/DatabaseExportHelper.java
+package net.programmierecke.radiodroid2.utils;
+
+import android.content.ContentResolver;
+import android.content.Context;
+import android.net.Uri;
+import android.text.TextUtils;
+
+import net.programmierecke.radiodroid2.database.RadioStation;
+import net.programmierecke.radiodroid2.database.RadioStationRepository;
+
+import java.io.IOException;
+import java.io.OutputStream;
+import java.util.List;
+
+public class DatabaseExportHelper {
+
+    public interface ExportCallback {
+        void onSuccess(int count, Uri uri);
+        void onError(String error);
+    }
+
+    /**
+     * 根据条件导出电台数据到新的 .db 文件
+     * @param context  上下文
+     * @param outputUri 保存路径 (通过 SAF 获取)
+     * @param country  国家筛选 (空表示不筛选)
+     * @param language 语言筛选 (空表示不筛选)
+     * @param keyword  关键词 (匹配名称或标签)
+     * @param callback 回调
+     */
+    public static void exportFilteredDatabase(Context context, Uri outputUri,
+                                              String country, String language,
+                                              String keyword, ExportCallback callback) {
+        new Thread(() -> {
+            try {
+                // 1. 获取筛选后的电台列表
+                RadioStationRepository repository = RadioStationRepository.getInstance(context);
+                List<RadioStation> stations = repository.getFilteredStationsSync(country, language, keyword);
+                if (stations == null || stations.isEmpty()) {
+                    callback.onError(context.getString(R.string.export_no_stations));
+                    return;
+                }
+
+                // 2. 创建新的 SQLite 数据库并写入数据
+                try (OutputStream os = context.getContentResolver().openOutputStream(outputUri)) {
+                    if (os == null) {
+                        callback.onError("无法打开输出流");
+                        return;
+                    }
+                    // 创建临时数据库文件，然后复制到输出流
+                    java.io.File tempFile = java.io.File.createTempFile("export_", ".db", context.getCacheDir());
+                    sqlite3(tempFile, stations);
+                    // 将临时文件内容写入输出流
+                    java.io.FileInputStream fis = new java.io.FileInputStream(tempFile);
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = fis.read(buffer)) > 0) {
+                        os.write(buffer, 0, len);
+                    }
+                    fis.close();
+                    tempFile.delete();
+                    callback.onSuccess(stations.size(), outputUri);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+                callback.onError(e.getMessage());
+            }
+        }).start();
+    }
+
+    private static void sqlite3(java.io.File dbFile, List<RadioStation> stations) throws Exception {
+        android.database.sqlite.SQLiteDatabase db = android.database.sqlite.SQLiteDatabase.openOrCreateDatabase(dbFile, null);
+        // 创建表结构 (与主表一致)
+        db.execSQL("CREATE TABLE IF NOT EXISTS stations (" +
+                "station_uuid TEXT PRIMARY KEY," +
+                "change_uuid TEXT," +
+                "name TEXT," +
+                "url TEXT," +
+                "homepage TEXT," +
+                "favicon TEXT," +
+                "country TEXT," +
+                "countrycode TEXT," +
+                "state TEXT," +
+                "tags TEXT," +
+                "language TEXT," +
+                "clickcount INTEGER," +
+                "clicktrend INTEGER," +
+                "votes INTEGER," +
+                "bitrate INTEGER," +
+                "codec TEXT," +
+                "lastcheckok INTEGER," +
+                "hls INTEGER," +
+                "lastchangetime TEXT" +
+                ")");
+        db.beginTransaction();
+        try {
+            for (RadioStation s : stations) {
+                db.execSQL("INSERT OR IGNORE INTO stations VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        new Object[]{
+                                s.stationUuid, s.changeUuid, s.name, s.url, s.homepage, s.favicon,
+                                s.country, s.countrycode, s.state, s.tags, s.language,
+                                s.clickcount, s.clicktrend, s.votes, s.bitrate, s.codec,
+                                s.lastcheckok ? 1 : 0, s.hls ? 1 : 0, s.lastchangetime
+                        });
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+            db.close();
+        }
+    }
+}
+```
+
+## 2. 在 `RadioStationRepository` 中添加筛选查询同步方法
+
+```java
+// 在 RadioStationRepository.java 中添加
+public List<RadioStation> getFilteredStationsSync(String country, String language, String keyword) {
+    return radioStationDao.getFilteredStationsSync(country, language, keyword);
+}
+```
+
+## 3. 在 `RadioStationDao` 中添加查询方法
+
+```java
+// RadioStationDao.java
+@Query("SELECT * FROM radio_stations WHERE " +
+        "(:country = '' OR country = :country) AND " +
+        "(:language = '' OR language = :language) AND " +
+        "(:keyword = '' OR name LIKE '%' || :keyword || '%' OR tags LIKE '%' || :keyword || '%') " +
+        "ORDER BY clickcount DESC")
+List<RadioStation> getFilteredStationsSync(String country, String language, String keyword);
+```
+
+## 4. 在设置界面添加导出入口
+
+修改 `res/xml/preferences.xml`，在 `pref_category_local_database_update` 中添加：
+
+```xml
+<Preference
+    android:key="export_database_filtered"
+    android:title="导出数据库（筛选后）"
+    android:summary="按国家/语言/关键词筛选后导出为 .db 文件" />
+```
+
+## 5. 在 `FragmentSettings` 中处理导出点击事件
+
+```java
+// FragmentSettings.java 的 onCreatePreferences 中添加
+findPreference("export_database_filtered").setOnPreferenceClickListener(preference -> {
+    showExportFilterDialog();
+    return true;
+});
+
+private void showExportFilterDialog() {
+    LayoutInflater inflater = LayoutInflater.from(requireContext());
+    View view = inflater.inflate(R.layout.dialog_export_filter, null);
+    EditText etCountry = view.findViewById(R.id.et_export_country);
+    EditText etLanguage = view.findViewById(R.id.et_export_language);
+    EditText etKeyword = view.findViewById(R.id.et_export_keyword);
+    
+    new AlertDialog.Builder(requireContext(), Utils.getAlertDialogThemeResId(requireContext()))
+            .setTitle("导出筛选条件")
+            .setView(view)
+            .setPositiveButton("导出", (dialog, which) -> {
+                String country = etCountry.getText().toString().trim();
+                String language = etLanguage.getText().toString().trim();
+                String keyword = etKeyword.getText().toString().trim();
+                startExportDatabase(country, language, keyword);
+            })
+            .setNegativeButton(android.R.string.cancel, null)
+            .show();
+}
+
+private void startExportDatabase(String country, String language, String keyword) {
+    // 使用 SAF 选择保存位置
+    Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+    intent.addCategory(Intent.CATEGORY_OPENABLE);
+    intent.setType("application/octet-stream");
+    intent.putExtra(Intent.EXTRA_TITLE, "radio_stations_export.db");
+    exportFilterLauncher.launch(intent);
+    // 保存筛选条件
+    this.exportCountry = country;
+    this.exportLanguage = language;
+    this.exportKeyword = keyword;
+}
+
+private String exportCountry, exportLanguage, exportKeyword;
+private ActivityResultLauncher<Intent> exportFilterLauncher;
+
+// 在 onCreatePreferences 或 onViewCreated 中注册
+exportFilterLauncher = registerForActivityResult(
+    new ActivityResultContracts.StartActivityForResult(),
+    result -> {
+        if (result.getResultCode() == Activity.RESULT_OK && result.getData() != null) {
+            Uri uri = result.getData().getData();
+            if (uri != null) {
+                DatabaseExportHelper.exportFilteredDatabase(requireContext(), uri,
+                        exportCountry, exportLanguage, exportKeyword,
+                        new DatabaseExportHelper.ExportCallback() {
+                            @Override
+                            public void onSuccess(int count, Uri uri) {
+                                Toast.makeText(getContext(), 
+                                    getString(R.string.export_success, count), Toast.LENGTH_LONG).show();
+                            }
+                            @Override
+                            public void onError(String error) {
+                                Toast.makeText(getContext(), 
+                                    getString(R.string.export_failed, error), Toast.LENGTH_LONG).show();
+                            }
+                        });
+            }
+        }
+    });
+```
+
+## 6. 布局文件 `dialog_export_filter.xml`
+
+```xml
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp">
+    <EditText
+        android:id="@+id/et_export_country"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:hint="国家 (留空表示全部)"
+        android:inputType="text" />
+    <EditText
+        android:id="@+id/et_export_language"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="语言 (留空表示全部)"
+        android:inputType="text" />
+    <EditText
+        android:id="@+id/et_export_keyword"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:hint="关键词 (匹配名称/标签)"
+        android:inputType="text" />
+</LinearLayout>
+```
+
+## 7. 添加字符串资源
+
+```xml
+<string name="export_no_stations">没有符合筛选条件的电台</string>
+<string name="export_success">成功导出 %d 个电台到数据库文件</string>
+<string name="export_failed">导出失败: %s</string>
+```
+
+## 8. 注意事项
+
+- 导出操作在后台线程执行，不会阻塞 UI。
+- 使用 AndroidX ActivityResult API 处理文件保存。
+- 筛选条件为空时导出全部数据，但数据量可能很大，建议用户谨慎使用。
+- 导出的 `.db` 文件结构与原版 RadioDroid 完全相同，可直接替换或导入。
+
+通过以上修改，用户即可按需将本地数据库（可筛选国家/语言/关键词）导出为独立的 `.db` 文件，方便备份或迁移到其他设备。

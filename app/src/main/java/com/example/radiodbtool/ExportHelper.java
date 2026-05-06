@@ -1,10 +1,14 @@
 package com.example.radiodbtool;
 
+import android.content.Context;
 import com.example.radiodbtool.database.RadioStation;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 
+import java.io.BufferedInputStream;
 import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.io.OutputStreamWriter;
@@ -50,6 +54,23 @@ public class ExportHelper {
         String json = gson.toJson(stations);
         out.write(json.getBytes("UTF-8"));
         out.flush();
+    }
+
+    public static void exportToDatabase(Context context, OutputStream out) throws IOException {
+        File dbFile = context.getDatabasePath("radio_droid_database");
+        if (!dbFile.exists()) {
+            throw new IOException("Database file not found");
+        }
+        
+        try (FileInputStream fis = new FileInputStream(dbFile);
+             BufferedInputStream bis = new BufferedInputStream(fis)) {
+            byte[] buffer = new byte[8192];
+            int bytesRead;
+            while ((bytesRead = bis.read(buffer)) != -1) {
+                out.write(buffer, 0, bytesRead);
+            }
+            out.flush();
+        }
     }
 
     private static String escapeM3UString(String str) {
