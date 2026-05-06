@@ -169,7 +169,7 @@ public class MainActivity extends AppCompatActivity {
         syncViewModel.getSyncStatus().observe(this, status -> {
             tvSyncStatus.setText(status);
             if (status.contains("同步完成") || status.contains("数据已是最新")) {
-                loadCountryAndLanguageOptions();
+                loadCountryAndLanguageSuggestions();
                 Toast.makeText(MainActivity.this, status, Toast.LENGTH_LONG).show();
             }
         });
