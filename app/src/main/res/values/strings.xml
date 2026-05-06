@@ -1,0 +1,37 @@
+<resources>
+    <string name="app_name">RadioDBTool</string>
+    
+    <string name="label_server_url">电台服务器地址</string>
+    <string name="hint_server_url">https://de1.api.radio-browser.info</string>
+    <string name="btn_sync">同步数据库</string>
+    
+    <string name="label_sync_status">同步状态</string>
+    <string name="sync_checking_network">正在检查网络...</string>
+    <string name="sync_getting_station_count">正在获取电台数量...</string>
+    <string name="sync_found_stations">发现 %d 个电台</string>
+    <string name="sync_downloading_stations">正在下载电台数据...</string>
+    <string name="sync_processing_data">正在处理数据...</string>
+    <string name="sync_writing_db">正在写入数据库...</string>
+    <string name="sync_completed">同步完成，共 %d 个电台</string>
+    
+    <string name="label_filter">筛选条件</string>
+    <string name="label_country">国家</string>
+    <string name="hint_country">留空表示全部</string>
+    <string name="label_language">语言</string>
+    <string name="hint_language">留空表示全部</string>
+    <string name="label_keyword">关键词</string>
+    <string name="hint_keyword">匹配名称/标签</string>
+    <string name="label_export_format">导出格式</string>
+    <string name="btn_export">导出筛选结果</string>
+    
+    <string name="export_format_m3u">M3U</string>
+    <string name="export_format_csv">CSV</string>
+    <string name="export_format_json">JSON</string>
+    
+    <string name="error_empty_server">请输入服务器地址</string>
+    <string name="error_no_stations">未找到符合条件的电台</string>
+    <string name="error_export_failed">导出失败：%s</string>
+    <string name="success_export">导出成功</string>
+    
+    <string name="progress_downloading" formatted="false">下载中... %d/%d</string>
+</resources>
