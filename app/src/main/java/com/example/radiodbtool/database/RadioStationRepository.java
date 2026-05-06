@@ -126,6 +126,7 @@ public class RadioStationRepository {
                 tempRadioStationDao.deleteAll();
 
                 final int pageSize = 100;
+                int totalPages = (int) Math.ceil((double) totalStations / pageSize);
                 int totalDownloaded = startOffset;
 
                 for (int page = startOffset / pageSize; page < totalPages; page++) {
