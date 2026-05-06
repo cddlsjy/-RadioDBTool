@@ -1,0 +1,248 @@
+## Android 版 RadioDroid 增加按国家/语言条件同步数据库
+
+根据您的需求，需要修改原 RadioDroid 的数据库更新逻辑，使其支持仅下载**指定国家**或**指定语言**的电台，而不是全量下载 5 万+ 电台。以下是详细修改指南，包含关键代码改动。
+
+### 1. 修改数据库同步流程
+
+核心同步逻辑位于：
+- `RadioStationRepository.java` 中的 `syncAllStationsFromNetworkInternal()` 方法。
+- `RadioBrowserServerManager.java` 提供服务器地址和网络测速。
+
+我们需要新增条件同步模式，具体修改步骤如下：
+
+#### 1.1 在 `RadioStationRepository` 中增加条件同步方法
+
+```java
+// RadioStationRepository.java 新增方法
+
+/**
+ * 条件同步：仅下载符合国家/语言/关键词的电台
+ * @param context Context
+ * @param country 国家代码或名称（如 "China" 或 "CN"），空字符串表示不限制
+ * @param language 语言（如 "Chinese"），空字符串表示不限制
+ * @param keyword 关键词（匹配名称或标签），空字符串表示不限制
+ * @param callback 同步回调
+ */
+public void syncStationsByFilter(Context context, String country, String language, String keyword, SyncCallback callback) {
+    executor.execute(() -> {
+        try {
+            // 1. 获取服务器信息（复用原有逻辑）
+            RadioBrowserServerManager.ServerInfo fastestServer = checkNetworkAndGetFastestServer(context, callback);
+            if (fastestServer == null) {
+                callback.onError(context.getString(R.string.error_network_unavailable));
+                return;
+            }
+            RadioBrowserServerManager.setCurrentServer(fastestServer.server);
+            RadioDroidApp app = (RadioDroidApp) context.getApplicationContext();
+            OkHttpClient httpClient = app.getHttpClient();
+
+            // 2. 清空临时数据库（确保全新下载）
+            tempRadioStationDao.deleteAll();
+
+            // 3. 分页拉取符合条件的数据
+            int limit = 500;
+            int offset = 0;
+            int totalDownloaded = 0;
+            while (true) {
+                // 构建带筛选参数的 URL
+                String url = buildFilterUrl(fastestServer.server, fastestServer.useHttps, country, language, keyword, limit, offset);
+                String result = Utils.downloadFeedFromServer(httpClient, app, fastestServer.server, url, fastestServer.useHttps, true, null);
+                if (result == null) {
+                    callback.onError(context.getString(R.string.error_list_update));
+                    return;
+                }
+                List<DataRadioStation> dataStations = DataRadioStation.DecodeJson(result);
+                if (dataStations == null || dataStations.isEmpty()) {
+                    break;
+                }
+                // 转换为 RadioStation 并插入临时数据库
+                List<RadioStation> radioStations = new ArrayList<>();
+                for (DataRadioStation ds : dataStations) {
+                    radioStations.add(RadioStation.fromDataRadioStation(ds));
+                }
+                tempRadioStationDao.insertAll(radioStations);
+                totalDownloaded += dataStations.size();
+                callback.onProgress(String.format(context.getString(R.string.progress_downloading_stations), totalDownloaded), totalDownloaded, 0); // 总数为 0 表示未知
+                offset += limit;
+                if (dataStations.size() < limit) break; // 已无更多数据
+                Thread.sleep(100);
+            }
+
+            // 4. 用临时数据库替换主数据库
+            if (totalDownloaded > 0) {
+                radioStationDao.deleteAll();
+                List<RadioStation> all = tempRadioStationDao.getAllStations();
+                radioStationDao.insertAll(all);
+                updateDatabaseTimestamp(context);
+                callback.onSuccess(context.getString(R.string.update_completed, totalDownloaded));
+            } else {
+                callback.onError(context.getString(R.string.error_no_stations_found));
+            }
+        } catch (Exception e) {
+            callback.onError(e.getMessage());
+        }
+    });
+}
+
+// 辅助方法：构建带筛选参数的 URL
+private String buildFilterUrl(String server, boolean useHttps, String country, String language, String keyword, int limit, int offset) {
+    StringBuilder url = new StringBuilder();
+    url.append(useHttps ? "https://" : "http://").append(server).append("/json/stations?limit=").append(limit).append("&offset=").append(offset);
+    if (!TextUtils.isEmpty(country)) {
+        url.append("&country=").append(Uri.encode(country));
+    }
+    if (!TextUtils.isEmpty(language)) {
+        url.append("&language=").append(Uri.encode(language));
+    }
+    if (!TextUtils.isEmpty(keyword)) {
+        url.append("&name=").append(Uri.encode(keyword));
+    }
+    return url.toString();
+}
+```
+
+#### 1.2 修改 `SyncCallback` 接口（增加进度回调）
+
+原 `SyncCallback` 可能只有简单的成功/失败，需要扩展以支持进度。
+
+```java
+// 在 RadioStationRepository 内部接口定义
+public interface SyncCallback {
+    void onProgress(String message, int current, int total);
+    void onSuccess(String message);
+    void onError(String error);
+    boolean onConfirmReplace(String message, int tempCount, int mainCount);
+}
+```
+
+#### 1.3 修改 `DatabaseUpdateWorker` 以支持条件同步
+
+原 WorkManager 任务只支持全量更新，我们需要修改它，使其能够接收额外参数（国家、语言）。
+
+```java
+// DatabaseUpdateWorker.java
+
+// 在 doWork() 中解析传入的条件参数
+String country = getInputData().getString("filter_country");
+String language = getInputData().getString("filter_language");
+String keyword = getInputData().getString("filter_keyword");
+
+if (TextUtils.isEmpty(country) && TextUtils.isEmpty(language) && TextUtils.isEmpty(keyword)) {
+    // 全量同步
+    repository.syncAllStationsFromNetworkInternal(getApplicationContext(), this);
+} else {
+    // 条件同步
+    repository.syncStationsByFilter(getApplicationContext(), country, language, keyword, this);
+}
+```
+
+### 2. 修改 UI 界面，提供条件选择入口
+
+#### 2.1 在 `FragmentSettings` 的“本地数据库更新”分类中添加筛选选项
+
+修改 `res/xml/preferences.xml`，在 `pref_category_local_database_update` 中添加：
+
+```xml
+<PreferenceCategory android:title="同步筛选条件">
+    <EditTextPreference
+        android:key="sync_country"
+        android:title="国家（如 China）"
+        android:summary="留空表示不限制"
+        android:defaultValue="" />
+    <EditTextPreference
+        android:key="sync_language"
+        android:title="语言（如 Chinese）"
+        android:summary="留空表示不限制"
+        android:defaultValue="" />
+    <EditTextPreference
+        android:key="sync_keyword"
+        android:title="关键词（匹配名称/标签）"
+        android:summary="留空表示不限制"
+        android:defaultValue="" />
+</PreferenceCategory>
+```
+
+#### 2.2 修改 `FragmentSettings` 中“更新本地数据库”按钮的点击事件
+
+```java
+// FragmentSettings.java 中，原有 update_local_database 的 OnPreferenceClickListener
+findPreference("update_local_database").setOnPreferenceClickListener(preference -> {
+    SharedPreferences prefs = PreferenceManager.getDefaultSharedPreferences(requireContext());
+    String country = prefs.getString("sync_country", "");
+    String language = prefs.getString("sync_language", "");
+    String keyword = prefs.getString("sync_keyword", "");
+
+    // 构建 WorkRequest 时传入筛选参数
+    Data inputData = new Data.Builder()
+            .putString("filter_country", country)
+            .putString("filter_language", language)
+            .putString("filter_keyword", keyword)
+            .build();
+    OneTimeWorkRequest updateRequest = new OneTimeWorkRequest.Builder(DatabaseUpdateWorker.class)
+            .setInputData(inputData)
+            .setConstraints(constraints)
+            .build();
+    WorkManager.getInstance(requireContext()).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.REPLACE, updateRequest);
+    
+    // 显示进度对话框
+    if (updateDialog == null || !updateDialog.isShowing()) {
+        updateDialog = new DatabaseUpdateProgressDialog(requireContext());
+        updateDialog.show();
+    }
+    return true;
+});
+```
+
+### 3. 修改进度对话框以支持“未知总数”的进度显示
+
+由于条件同步无法提前获知总电台数，进度对话框需要调整：当 `total <= 0` 时，进度条应显示为不确定模式（indeterminate），并仅显示“已下载 X 条”。
+
+在 `DatabaseUpdateProgressDialog.java` 的 `updateProgress` 方法中：
+
+```java
+public void updateProgress(String message, int current, int total) {
+    if (total > 0) {
+        progressBar.setIndeterminate(false);
+        progressBar.setMax(total);
+        progressBar.setProgress(current);
+        progressText.setText(String.format("%d/%d (%d%%)", current, total, (current*100/total)));
+    } else {
+        progressBar.setIndeterminate(true);
+        progressText.setText(String.format("已下载 %d 条", current));
+    }
+    messageText.setText(message);
+}
+```
+
+### 4. 确保数据库表结构支持条件查询（已有）
+
+原数据库的 `stations` 表已包含 `country`, `language` 等字段，无需修改。
+
+### 5. 保留断点续传功能
+
+上述条件同步代码中，我们使用了临时数据库，但未添加断点续传。为了与全量同步保持一致的体验，可以在 `syncStationsByFilter` 中加入与全量同步类似的 `sync_progress` 表记录 offset。但由于条件同步总数未知，断点续传需要基于过滤条件的组合和 offset 来恢复。
+
+简化方案：不实现条件同步的断点续传，因为条件同步数据量通常很小（几百到几千条），一次性完成。
+
+### 6. 用户体验改进
+
+- 在设置界面中，添加说明文字：“条件同步将只下载指定国家/语言的电台，数据量小，速度快”。
+- 给国家、语言字段提供常用值建议（例如从服务器获取可用国家列表，但会增加网络请求；可先让用户手动输入）。
+
+### 7. 注意事项
+
+- RadioBrowser API 的 `country` 参数需要使用**英文名称**（如 `China`）或**国家代码**（如 `CN`）。推荐使用名称，因为 API 文档显示 `country` 匹配的是国家名称字段。
+- 语言参数同样使用英文名称（如 `Chinese`）。
+- 关键词参数 `name` 是对电台名称进行子串匹配，不区分大小写。
+
+### 8. 完整代码改动汇总
+
+由于原项目文件众多，以上为核心改动点。您可以根据此指南修改相应文件。关键改动文件列表：
+
+1. `RadioStationRepository.java` – 新增 `syncStationsByFilter` 方法及辅助方法。
+2. `DatabaseUpdateWorker.java` – 解析输入参数并调用相应的同步方法。
+3. `FragmentSettings.java` – 添加筛选条件输入 UI 并传递给 WorkManager。
+4. `DatabaseUpdateProgressDialog.java` – 支持未知总数的进度显示。
+5. `res/xml/preferences.xml` – 添加新的设置项。
+
+按照上述修改，用户即可在 Android 版 RadioDroid 中按需下载特定国家或语言的电台数据库，节省时间和流量。

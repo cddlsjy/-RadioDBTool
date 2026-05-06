@@ -1,6 +1,8 @@
 package com.example.radiodbtool.database;
 
 import android.content.Context;
+import android.net.Uri;
+import android.text.TextUtils;
 import android.util.Log;
 
 import androidx.room.Room;
@@ -171,5 +173,113 @@ public class RadioStationRepository {
     
     public List<String> getAllLanguages() {
         return radioStationDao.getAllLanguagesSync();
+    }
+    
+    public void syncStationsByFilter(Context context, String serverUrl, String country, String language, String keyword, ProgressListener listener) {
+        executor.execute(() -> syncStationsByFilterInternal(context, serverUrl, country, language, keyword, listener));
+    }
+    
+    private void syncStationsByFilterInternal(Context context, String serverUrl, String country, String language, String keyword, ProgressListener listener) {
+        synchronized (sSyncLock) {
+            try {
+                listener.onProgress("正在检查网络...", 0, 100);
+                
+                if (!Utils.hasAnyConnection(context)) {
+                    listener.onError("网络连接不可用");
+                    return;
+                }
+                
+                OkHttpClient httpClient = HttpClient.getInstance();
+                boolean useHttps = serverUrl.startsWith("https://");
+                String server = serverUrl.replace("http://", "").replace("https://", "");
+                
+                if (server.contains("/")) {
+                    server = server.substring(0, server.indexOf("/"));
+                }
+                
+                listener.onProgress("正在下载符合条件的电台...", 0, 0);
+                
+                tempRadioStationDao.deleteAll();
+                
+                final int limit = 500;
+                int offset = 0;
+                int totalDownloaded = 0;
+                
+                while (true) {
+                    String url = buildFilterUrl(server, useHttps, country, language, keyword, limit, offset);
+                    String path = url.replace(useHttps ? "https://" : "http://", "").replace(server + "/", "");
+                    
+                    String resultString = Utils.downloadFeedFromServer(httpClient, context, server, path, useHttps);
+                    
+                    if (resultString == null) {
+                        listener.onError("获取电台数据失败");
+                        return;
+                    }
+                    
+                    List<DataRadioStation> dataStations = DataRadioStation.DecodeJson(resultString);
+                    
+                    if (dataStations == null || dataStations.isEmpty()) {
+                        break;
+                    }
+                    
+                    List<RadioStation> radioStations = new ArrayList<>();
+                    for (DataRadioStation ds : dataStations) {
+                        radioStations.add(RadioStation.fromDataRadioStation(ds));
+                    }
+                    
+                    tempRadioStationDao.insertAll(radioStations);
+                    totalDownloaded += dataStations.size();
+                    
+                    listener.onProgress("正在下载电台数据...", totalDownloaded, 0);
+                    
+                    offset += limit;
+                    if (dataStations.size() < limit) break;
+                    
+                    Thread.sleep(100);
+                }
+                
+                if (totalDownloaded > 0) {
+                    listener.onProgress("正在处理数据...", totalDownloaded, totalDownloaded);
+                    
+                    radioStationDao.deleteAll();
+                    
+                    List<RadioStation> allStationsFromTemp = tempRadioStationDao.getAllStations();
+                    
+                    if (!allStationsFromTemp.isEmpty()) {
+                        listener.onProgress("正在写入数据库...", totalDownloaded, totalDownloaded);
+                        
+                        final int insertBatchSize = 1000;
+                        for (int i = 0; i < allStationsFromTemp.size(); i += insertBatchSize) {
+                            int endIndex = Math.min(i + insertBatchSize, allStationsFromTemp.size());
+                            List<RadioStation> batchToInsert = allStationsFromTemp.subList(i, endIndex);
+                            radioStationDao.insertAll(batchToInsert);
+                        }
+                    }
+                    
+                    tempRadioStationDao.deleteAll();
+                    listener.onSuccess("同步完成，共 " + totalDownloaded + " 个电台");
+                } else {
+                    listener.onError("没有找到符合条件的电台");
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "条件同步电台数据时出错", e);
+                listener.onError("同步失败: " + e.getMessage());
+            }
+        }
+    }
+    
+    private String buildFilterUrl(String server, boolean useHttps, String country, String language, String keyword, int limit, int offset) {
+        StringBuilder url = new StringBuilder();
+        url.append("json/stations?limit=").append(limit).append("&offset=").append(offset);
+        if (!TextUtils.isEmpty(country)) {
+            url.append("&country=").append(Uri.encode(country));
+        }
+        if (!TextUtils.isEmpty(language)) {
+            url.append("&language=").append(Uri.encode(language));
+        }
+        if (!TextUtils.isEmpty(keyword)) {
+            url.append("&name=").append(Uri.encode(keyword));
+        }
+        return url.toString();
     }
 }

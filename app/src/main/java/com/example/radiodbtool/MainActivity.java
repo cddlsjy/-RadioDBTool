@@ -89,6 +89,10 @@ public class MainActivity extends AppCompatActivity {
                 return;
             }
 
+            String country = etCountry.getText().toString().trim();
+            String language = etLanguage.getText().toString().trim();
+            String keyword = etKeyword.getText().toString().trim();
+
             saveServerUrl(serverUrl);
 
             btnSync.setEnabled(false);
@@ -96,8 +100,10 @@ public class MainActivity extends AppCompatActivity {
             progressBarSync.setIndeterminate(true);
             tvSyncStatus.setText("正在同步，请稍候...");
 
+            boolean hasFilter = !country.isEmpty() || !language.isEmpty() || !keyword.isEmpty();
+
             new Thread(() -> {
-                repository.syncAllStations(this, serverUrl, new RadioStationRepository.ProgressListener() {
+                RadioStationRepository.ProgressListener listener = new RadioStationRepository.ProgressListener() {
                     @Override
                     public void onProgress(String message, int current, int total) {
                         runOnUiThread(() -> {
@@ -107,7 +113,8 @@ public class MainActivity extends AppCompatActivity {
                                 progressBarSync.setProgress(current);
                                 tvSyncStatus.setText(message + " " + current + "/" + total);
                             } else {
-                                tvSyncStatus.setText(message);
+                                progressBarSync.setIndeterminate(true);
+                                tvSyncStatus.setText(message + " " + current + " 条");
                             }
                         });
                     }
@@ -129,7 +136,13 @@ public class MainActivity extends AppCompatActivity {
                             Toast.makeText(MainActivity.this, "同步失败：" + error, Toast.LENGTH_LONG).show();
                         });
                     }
-                });
+                };
+
+                if (hasFilter) {
+                    repository.syncStationsByFilter(MainActivity.this, serverUrl, country, language, keyword, listener);
+                } else {
+                    repository.syncAllStations(MainActivity.this, serverUrl, listener);
+                }
             }).start();
         });
     }
