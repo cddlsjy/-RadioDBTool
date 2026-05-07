@@ -1,6 +1,11 @@
 package com.example.radiodbtool;
 
+import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.Nullable;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.lifecycle.ViewModelProvider;
 import androidx.lifecycle.Observer;
@@ -43,12 +48,18 @@ public class MainActivity extends AppCompatActivity {
     private Button btnExport;
     private ProgressBar progressBarExport;
     private TextView tvExportStatus;
+    private Button btnImportDb;
+    private Button btnExportDb;
+    private TextView tvDbStatus;
 
     private RadioStationRepository repository;
     private SyncViewModel syncViewModel;
     private List<RadioStation> stationsToExport;
     private int exportFormat;
     private String exportCountry, exportLanguage, exportKeyword;
+
+    private ActivityResultLauncher<String[]> importDbLauncher;
+    private ActivityResultLauncher<String> exportDbLauncher;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -59,6 +70,9 @@ public class MainActivity extends AppCompatActivity {
         syncViewModel = new ViewModelProvider(this).get(SyncViewModel.class);
 
         etServerUrl = findViewById(R.id.etServerUrl);
+        etCountry = findViewById(R.id.etCountry);
+        etLanguage = findViewById(R.id.etLanguage);
+        etKeyword = findViewById(R.id.etKeyword);
         spinnerExportFormat = findViewById(R.id.spinnerExportFormat);
         btnSync = findViewById(R.id.btnSync);
         btnResumeSync = findViewById(R.id.btnResumeSync);
@@ -67,14 +81,142 @@ public class MainActivity extends AppCompatActivity {
         btnExport = findViewById(R.id.btnExport);
         progressBarExport = findViewById(R.id.progressBarExport);
         tvExportStatus = findViewById(R.id.tvExportStatus);
+        btnImportDb = findViewById(R.id.btnImportDb);
+        btnExportDb = findViewById(R.id.btnExportDb);
+        tvDbStatus = findViewById(R.id.tvDbStatus);
 
+        setupActivityResultLaunchers();
         setupCountryAndLanguageInputs();
         setupSpinner();
         setupSyncButton();
         setupResumeSyncButton();
         setupExportButton();
+        setupImportExportButtons();
         setupSyncObserver();
         loadServerUrl();
+        updateDbButtonsState();
+    }
+
+    private void setupActivityResultLaunchers() {
+        importDbLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(),
+                new ActivityResultCallback<Uri>() {
+                    @Override
+                    public void onActivityResult(Uri uri) {
+                        if (uri != null) {
+                            importDatabase(uri);
+                        }
+                    }
+                });
+
+        exportDbLauncher = registerForActivityResult(
+                new ActivityResultContracts.CreateDocument("application/octet-stream"),
+                new ActivityResultCallback<Uri>() {
+                    @Override
+                    public void onActivityResult(Uri uri) {
+                        if (uri != null) {
+                            exportDatabase(uri);
+                        }
+                    }
+                });
+    }
+
+    private void setupImportExportButtons() {
+        btnImportDb.setOnClickListener(v -> showImportConfirmDialog());
+
+        btnExportDb.setOnClickListener(v -> {
+            if (DatabaseImportExportHelper.hasData(this)) {
+                exportDbLauncher.launch("radio_stations.db");
+            } else {
+                tvDbStatus.setText(R.string.db_no_data);
+            }
+        });
+    }
+
+    private void showImportConfirmDialog() {
+        new AlertDialog.Builder(this)
+                .setTitle(R.string.db_import_confirm_title)
+                .setMessage(R.string.db_import_confirm_message)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    importDbLauncher.launch(new String[]{"*/*"});
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    private void importDatabase(Uri uri) {
+        tvDbStatus.setText(R.string.db_importing);
+        btnImportDb.setEnabled(false);
+        btnExportDb.setEnabled(false);
+
+        DatabaseImportExportHelper.importDatabase(this, uri, new DatabaseImportExportHelper.ImportExportCallback() {
+            @Override
+            public void onSuccess(String message) {
+                runOnUiThread(() -> {
+                    tvDbStatus.setText(message);
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                    btnImportDb.setEnabled(true);
+                    btnExportDb.setEnabled(true);
+                    loadCountryAndLanguageSuggestions();
+                });
+            }
+
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    tvDbStatus.setText(getString(R.string.db_import_failed, error));
+                    Toast.makeText(MainActivity.this, getString(R.string.db_import_failed, error), Toast.LENGTH_LONG).show();
+                    btnImportDb.setEnabled(true);
+                    btnExportDb.setEnabled(true);
+                });
+            }
+
+            @Override
+            public void onProgress(String message) {
+                runOnUiThread(() -> tvDbStatus.setText(message));
+            }
+        });
+    }
+
+    private void exportDatabase(Uri uri) {
+        tvDbStatus.setText(R.string.db_exporting);
+        btnImportDb.setEnabled(false);
+        btnExportDb.setEnabled(false);
+
+        DatabaseImportExportHelper.exportDatabase(this, uri, new DatabaseImportExportHelper.ImportExportCallback() {
+            @Override
+            public void onSuccess(String message) {
+                runOnUiThread(() -> {
+                    tvDbStatus.setText(message);
+                    Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
+                    btnImportDb.setEnabled(true);
+                    btnExportDb.setEnabled(true);
+                });
+            }
+
+            @Override
+            public void onError(String error) {
+                runOnUiThread(() -> {
+                    tvDbStatus.setText(getString(R.string.db_export_failed, error));
+                    Toast.makeText(MainActivity.this, getString(R.string.db_export_failed, error), Toast.LENGTH_LONG).show();
+                    btnImportDb.setEnabled(true);
+                    btnExportDb.setEnabled(true);
+                });
+            }
+
+            @Override
+            public void onProgress(String message) {
+                runOnUiThread(() -> tvDbStatus.setText(message));
+            }
+        });
+    }
+
+    private void updateDbButtonsState() {
+        boolean hasData = DatabaseImportExportHelper.hasData(this);
+        btnExportDb.setEnabled(hasData);
+        if (!hasData) {
+            tvDbStatus.setText(R.string.db_no_data);
+        }
     }
 
     private void setupCountryAndLanguageInputs() {

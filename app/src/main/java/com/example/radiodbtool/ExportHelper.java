@@ -18,9 +18,13 @@ public class ExportHelper {
 
     public static void exportToM3U(List<RadioStation> stations, OutputStream out) throws IOException {
         BufferedWriter writer = new BufferedWriter(new OutputStreamWriter(out, "UTF-8"));
-        writer.write("#EXTM3U\n");
+        writer.write("#EXTM3U\n\n");
         for (RadioStation s : stations) {
             writer.write("#EXTINF:-1," + escapeM3UString(s.name) + "\n");
+            writer.write("#RADIOBROWSERUUID:" + escapeM3UString(s.stationUuid) + "\n");
+            if (s.favicon != null && !s.favicon.isEmpty()) {
+                writer.write("#EXTIMG:" + escapeM3UString(s.favicon) + "\n");
+            }
             writer.write(s.url + "\n\n");
         }
         writer.flush();

@@ -10,6 +10,8 @@ import androidx.room.TypeConverters;
 @Database(entities = {RadioStation.class, UpdateTimestamp.class}, version = 1, exportSchema = false)
 @TypeConverters({Converters.class})
 public abstract class RadioDroidDatabase extends RoomDatabase {
+    private static final String DATABASE_NAME = "radio_stations.db";
+
     public abstract RadioStationDao radioStationDao();
     
     public abstract UpdateTimestampDao updateTimestampDao();
@@ -21,12 +23,21 @@ public abstract class RadioDroidDatabase extends RoomDatabase {
             synchronized (RadioDroidDatabase.class) {
                 if (INSTANCE == null) {
                     INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
-                            RadioDroidDatabase.class, "radio_droid_database")
+                            RadioDroidDatabase.class, DATABASE_NAME)
                             .fallbackToDestructiveMigration()
                             .build();
                 }
             }
         }
         return INSTANCE;
+    }
+
+    public static void destroyInstance() {
+        if (INSTANCE != null) {
+            if (INSTANCE.isOpen()) {
+                INSTANCE.close();
+            }
+            INSTANCE = null;
+        }
     }
 }

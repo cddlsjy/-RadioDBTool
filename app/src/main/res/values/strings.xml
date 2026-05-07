@@ -36,6 +36,19 @@
     <string name="error_no_stations">未找到符合条件的电台</string>
     <string name="error_export_failed">导出失败：%s</string>
     <string name="success_export">导出成功</string>
-    
+
+    <string name="label_database_management">数据库管理</string>
+    <string name="btn_import_db">导入数据库</string>
+    <string name="btn_export_db">导出当前数据库</string>
+    <string name="db_import_success">数据库导入成功，数据已更新</string>
+    <string name="db_export_success">数据库导出成功</string>
+    <string name="db_importing">正在导入数据库…</string>
+    <string name="db_exporting">正在导出数据库…</string>
+    <string name="db_import_failed">导入失败：%s</string>
+    <string name="db_export_failed">导出失败：%s</string>
+    <string name="db_no_data">数据库暂无数据，无法导出</string>
+    <string name="db_import_confirm_title">确认导入</string>
+    <string name="db_import_confirm_message">导入将覆盖所有本地数据，确定继续吗？</string>
+
     <string name="progress_downloading" formatted="false">下载中... %d/%d</string>
 </resources>

@@ -47,7 +47,7 @@ public class RadioStationRepository {
     private RadioStationRepository(RadioStationDao radioStationDao, Context context) {
         this.radioStationDao = radioStationDao;
         RadioDroidDatabase tempDatabase = Room.databaseBuilder(context.getApplicationContext(),
-                RadioDroidDatabase.class, "radio_droid_database_temp")
+                RadioDroidDatabase.class, "radio_stations_temp.db")
                 .fallbackToDestructiveMigration()
                 .build();
         this.tempRadioStationDao = tempDatabase.radioStationDao();
